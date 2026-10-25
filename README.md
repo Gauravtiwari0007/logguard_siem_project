@@ -1,207 +1,138 @@
-from __future__ import annotations
+# LogGuard Mini-SIEM
 
-import io
-from pathlib import Path
+LogGuard is a small Python project that looks through authentication logs and helps spot login activity that may deserve a closer look. I built it as a practical way to explore a few CEH-related topics, including failed-login analysis, brute-force indicators, basic incident investigation, and security reporting.
 
-import matplotlib.pyplot as plt
-import pandas as pd
-import streamlit as st
+The project is intended for learning and demonstration. It does not try passwords, connect to other machines, or automatically block IP addresses.
 
-from logguard import (
-    analyze_events,
-    load_events,
-    make_alerts_csv,
-    make_alerts_json,
-    summarize_events,
-)
+## What it can do
 
-APP_DIR = Path(__file__).parent
-SAMPLE_LOG = APP_DIR / "data" / "sample_auth.log"
+- Read common Linux OpenSSH authentication log entries.
+- Import events from a CSV file.
+- Count failed logins by IP address and username.
+- Flag repeated failures within a time window.
+- Highlight cases where one IP appears to target several usernames.
+- Flag a successful login when recent failures for the same username and IP came before it.
+- Show event trends and summaries in a Streamlit dashboard.
+- Export normalized events and alerts as CSV or JSON.
 
-st.set_page_config(page_title="LogGuard Mini-SIEM", page_icon="🛡️", layout="wide")
-st.title("🛡️ LogGuard — Authentication Log Analyzer")
-st.caption("A beginner-friendly mini-SIEM for detecting suspicious authentication activity.")
-st.info(
-    "Use only logs you own or are authorized to analyze. This tool analyzes uploaded files "
-    "locally; it does not attempt logins, scan networks, or block accounts."
-)
+These detections are indicators, not proof that an attack happened. For example, a user who forgets a password several times or a shared network address can produce activity that looks suspicious.
 
-with st.sidebar:
-    st.header("Detection settings")
-    failure_threshold = st.slider(
-        "Failed attempts to trigger alert", min_value=2, max_value=30, value=5
-    )
-    window_minutes = st.slider(
-        "Detection time window (minutes)", min_value=1, max_value=120, value=10
-    )
-    distinct_users_threshold = st.slider(
-        "Distinct usernames from one IP", min_value=2, max_value=20, value=5
-    )
-    st.divider()
-    st.write("**Input formats**")
-    st.caption("Linux OpenSSH auth.log text, or CSV with timestamp, event, username, ip, and optional details.")
+## Tools used
 
-uploaded = st.file_uploader(
-    "Upload an authentication log (.log, .txt, or .csv)",
-    type=["log", "txt", "csv"],
-    help="For a quick demo, leave the upload empty to use the included sample log.",
-)
+- **Python** for the application and detection logic
+- **Streamlit** for the dashboard
+- **Pandas** for working with log data
+- **Matplotlib** for charts
+- **Regular expressions** for parsing common OpenSSH log messages
+- **Pytest** for basic automated tests
 
-if uploaded is None:
-    st.caption("Showing bundled demo data: data/sample_auth.log")
-    raw = SAMPLE_LOG.read_text(encoding="utf-8", errors="replace")
-    events, parse_warnings = load_events(raw, source_name="sample_auth.log")
-else:
-    raw_bytes = uploaded.getvalue()
-    raw = raw_bytes.decode("utf-8", errors="replace")
-    events, parse_warnings = load_events(
-        raw, source_name=uploaded.name, is_csv=uploaded.name.lower().endswith(".csv")
-    )
+## Project files
 
-if parse_warnings:
-    with st.expander(f"Import notes ({len(parse_warnings)})"):
-        for warning in parse_warnings[:100]:
-            st.write(f"• {warning}")
-        if len(parse_warnings) > 100:
-            st.caption(f"{len(parse_warnings) - 100} additional notes omitted.")
+```text
+logguard_siem/
+├── app.py                  # Streamlit dashboard
+├── logguard.py             # Log parsing and alert rules
+├── requirements.txt        # Python dependencies
+├── README.md
+├── data/
+│   ├── sample_auth.log     # Example Linux SSH log
+│   └── sample_events.csv   # Example normalized events
+└── tests/
+    └── test_logguard.py    # Tests for parsing and detection
+```
 
-if events.empty:
-    st.error("No supported authentication events were parsed. Check the input format and README.")
-    st.stop()
+## Getting started
 
-events, alerts = analyze_events(
-    events,
-    failure_threshold=failure_threshold,
-    window_minutes=window_minutes,
-    distinct_users_threshold=distinct_users_threshold,
-)
-summary = summarize_events(events, alerts)
+You will need Python 3.10 or newer and `pip`.
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Parsed events", f"{summary['total_events']:,}")
-c2.metric("Failed logins", f"{summary['failed_logins']:,}")
-c3.metric("Successful logins", f"{summary['successful_logins']:,}")
-c4.metric("Alerts", f"{len(alerts):,}")
+### Windows
 
-tab_overview, tab_events, tab_alerts, tab_about = st.tabs(
-    ["Overview", "Events", "Alerts & export", "About"]
-)
+Open PowerShell in the project folder and run:
 
-with tab_overview:
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Authentication events over time")
-        chart_data = events.copy()
-        chart_data["minute"] = chart_data["timestamp"].dt.floor("min")
-        trend = (
-            chart_data.groupby(["minute", "event_type"])
-            .size()
-            .unstack(fill_value=0)
-            .sort_index()
-        )
-        if not trend.empty:
-            fig, ax = plt.subplots(figsize=(9, 4))
-            trend.plot(ax=ax, marker="o", linewidth=1.6)
-            ax.set_xlabel("Time")
-            ax.set_ylabel("Events / minute")
-            ax.grid(True, alpha=0.25)
-            fig.tight_layout()
-            st.pyplot(fig)
-            plt.close(fig)
-        else:
-            st.caption("No events available for the trend chart.")
-    with right:
-        st.subheader("Top source IPs by failed logins")
-        failures = events[events["event_type"] == "failure"]
-        if failures.empty:
-            st.success("No failed login events in this dataset.")
-        else:
-            top_ips = failures.groupby("ip").size().sort_values(ascending=False).head(10)
-            fig, ax = plt.subplots(figsize=(9, 4))
-            top_ips.sort_values().plot(kind="barh", ax=ax)
-            ax.set_xlabel("Failed login events")
-            ax.set_ylabel("Source IP")
-            ax.grid(axis="x", alpha=0.25)
-            fig.tight_layout()
-            st.pyplot(fig)
-            plt.close(fig)
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-    st.subheader("Quick breakdown")
-    b1, b2 = st.columns(2)
-    with b1:
-        st.write("**Events by type**")
-        st.dataframe(
-            events["event_type"].value_counts().rename_axis("event_type").reset_index(name="count"),
-            use_container_width=True,
-            hide_index=True,
-        )
-    with b2:
-        st.write("**Failed attempts by username**")
-        by_user = (
-            events[events["event_type"] == "failure"]
-            .groupby("username").size().sort_values(ascending=False)
-            .head(10).rename("failed_attempts").reset_index()
-        )
-        st.dataframe(by_user, use_container_width=True, hide_index=True)
+If PowerShell does not allow environment activation, run the environment's Python directly:
 
-with tab_events:
-    st.subheader("Normalized events")
-    event_types = sorted(events["event_type"].dropna().unique().tolist())
-    selected_types = st.multiselect("Filter event types", event_types, default=event_types)
-    ip_values = sorted([x for x in events["ip"].dropna().unique().tolist() if x and x != "-"])
-    selected_ips = st.multiselect("Filter source IPs", ip_values, default=[])
-    view = events[events["event_type"].isin(selected_types)]
-    if selected_ips:
-        view = view[view["ip"].isin(selected_ips)]
-    st.dataframe(view.sort_values("timestamp", ascending=False), use_container_width=True, hide_index=True)
-    st.download_button(
-        "Download normalized events CSV",
-        data=view.to_csv(index=False).encode("utf-8"),
-        file_name="logguard_normalized_events.csv",
-        mime="text/csv",
-    )
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
 
-with tab_alerts:
-    st.subheader("Detection alerts")
-    if alerts.empty:
-        st.success("No alerts matched the current thresholds.")
-    else:
-        st.dataframe(alerts.sort_values("first_seen", ascending=False), use_container_width=True, hide_index=True)
-        st.download_button(
-            "Download alerts CSV",
-            data=make_alerts_csv(alerts),
-            file_name="logguard_alerts.csv",
-            mime="text/csv",
-        )
-        st.download_button(
-            "Download alerts JSON",
-            data=make_alerts_json(alerts),
-            file_name="logguard_alerts.json",
-            mime="application/json",
-        )
-    st.caption(
-        "Alerts are heuristic indicators, not proof of compromise. Review surrounding events and "
-        "environmental context before taking action."
-    )
+### Linux or macOS
 
-with tab_about:
-    st.subheader("What this mini-SIEM detects")
-    st.markdown(
-        """
-        - **Repeated failures:** the same source IP has at least the configured number of failed logins
-          inside the selected rolling time window.
-        - **Username spray / enumeration signal:** one source IP fails against several distinct usernames
-          within the time window.
-        - **Failure followed by success:** a successful login from an IP follows recent failed attempts
-          for the same username.
-        - **Event trends:** event counts over time, top source IPs, and failures by username.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-        **Limitations:** parsing depends on log format; NAT, shared hosts, automation, and legitimate
-        user mistakes can cause false positives. The tool does not infer attribution or automatically
-        block users/IPs.
-        """
-    )
-    st.markdown("**CSV schema**")
-    st.code("timestamp,event,username,ip,details\n2026-10-25T10:00:00,failure,alice,192.0.2.10,invalid password")
-    st.markdown("**Event values:** `failure`, `success`, `invalid_user`, or `other`.")
-    st.markdown("See `README.md` for setup, test instructions, and sample data details.")
+Streamlit will print a local address in the terminal, usually `http://localhost:8501`. Open that address in your browser.
+
+You do not need to upload a file to try the app. It loads `data/sample_auth.log` by default, so the dashboard should have example events and alerts as soon as it opens.
+
+## Using your own data
+
+The upload field accepts `.log`, `.txt`, and `.csv` files.
+
+For Linux, the parser supports common OpenSSH messages such as failed passwords, invalid usernames, and accepted logins. Linux syslog timestamps often do not include a year, so the parser uses the current year for those entries.
+
+For CSV files, include at least `timestamp` and `event`. `username`, `ip`, and `details` are optional, but they make the results more useful.
+
+Example:
+
+```csv
+timestamp,event,username,ip,details
+2026-10-25T10:00:00,failure,alice,192.0.2.10,invalid password
+2026-10-25T10:01:00,success,alice,192.0.2.10,login succeeded
+```
+
+Accepted event values include `failure`, `success`, `invalid_user`, and `other`. A few common alternatives, such as `failed_login` and `login_success`, are also recognized.
+
+The CSV option can be used for synthetic Windows login events or events exported from another tool, as long as they are converted to this format first. The project does **not** currently read raw Windows `.evtx` files directly.
+
+## How the alerts work
+
+The sidebar lets you change the detection settings.
+
+1. **Repeated authentication failures:** raises an alert when an IP has at least the selected number of failure or invalid-user events inside the selected time window.
+2. **Multiple usernames targeted:** flags an IP that has failed authentication attempts against several different usernames in the same time window. This can resemble username enumeration or password spraying.
+3. **Failure followed by success:** flags a successful login when recent failures for the same username and IP occurred before it.
+
+The dashboard also shows the number of events, failed and successful logins, trends over time, and the IP addresses with the most failures. You can download the normalized event list or the alerts for further review.
+
+## Run the tests
+
+From the project folder, run:
+
+```bash
+pytest -q
+```
+
+The tests cover basic Linux log parsing, CSV import, and the main alert patterns.
+
+## Current limitations
+
+This is a learning project rather than a production SIEM. The parser handles common OpenSSH messages, not every possible Linux distribution or authentication service. The app processes uploaded files in the current session and does not provide long-term event storage, live collection, user accounts, or automatic incident response.
+
+Detection thresholds will need tuning for a real environment. Shared IP addresses, VPNs, scheduled jobs, and legitimate login mistakes can all lead to false positives. Review the surrounding evidence before treating an alert as an incident.
+
+## Ideas for future improvements
+
+- Add direct support for Windows `.evtx` files.
+- Save imported events and alert history in SQLite.
+- Add time-range filters and alert acknowledgement.
+- Let users maintain allowlists for known internal systems.
+- Add more parsing tests and a few larger sample datasets.
+- Package the application with Docker or add automated tests to a CI workflow.
+
+## Responsible use
+
+Only analyze logs you own or have permission to review. Use the included sample data or a controlled lab when demonstrating the project. LogGuard is designed to help inspect authentication events; it is not intended to identify or accuse a person based on an IP address alone.
